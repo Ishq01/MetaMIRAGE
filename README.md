@@ -9,6 +9,12 @@ Our paper is available on arXiv:
 [MIRAGE: A Benchmark for Multimodal Information-Seeking and Reasoning in Agricultural Expert-Guided Conversations](https://arxiv.org/abs/2506.20100)
 
 <div align="center">
+  <h3 style="color: #8A2BE2; background-color: #F5F0FF; padding: 10px; border-radius: 5px; border: 2px solid #8A2BE2;">
+    🎉 Neurips 2025 Datasets & Benchmarks Track
+  </h3>
+</div>
+
+<div align="center">
   <img src="assets/data-logo.png" alt="MIRAGE Data Logo" width="300"/>
 </div>
 
