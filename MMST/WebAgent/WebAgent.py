@@ -1,13 +1,13 @@
 # =============================
-# Starter WebAgent Workflow
+# WebAgent with vLLM + HuggingFaceEmbeddings
 # =============================
 
-from langchain.chains import LLMChain, RetrievalQA
+from langchain.chains import LLMChain
 from langchain.prompts import PromptTemplate
-from langchain.llms import OpenAI  # Or any LLM of your choice
+from langchain_openai import ChatOpenAI
 from langchain.vectorstores import Chroma
-from langchain.embeddings import OpenAIEmbeddings
-from langchain.document_loaders import WebBaseLoader  # For fetching HTML pages
+from langchain.embeddings import HuggingFaceEmbeddings
+from langchain.document_loaders import WebBaseLoader
 from langchain.tools import BaseTool
 import datetime
 
@@ -26,23 +26,20 @@ meta_data = {
 keywords = ["common pest"]
 
 # -----------------------------
-# 2. Optional: Local DB Check
+# 2. Vector Store + Embeddings
 # -----------------------------
-# Assume you have a vector store with embeddings
-embedding_model = OpenAIEmbeddings()
+embedding_model = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
 vectorstore = Chroma(persist_directory="./vectorstore", embedding_function=embedding_model)
 
 # -----------------------------
-# 3. Web Search
+# 3. Web Search Tool (placeholder)
 # -----------------------------
-# Placeholder: define a simple tool that queries a Web Search API
 class WebSearchTool(BaseTool):
     name = "web_search"
     description = "Use this to search the web for info related to agriculture pests"
 
     def _run(self, query: str):
-        # Implement your API call to SerpAPI, Bing, etc.
-        # Return list of results (title, snippet, URL)
+        # Implement actual API call (SerpAPI, Bing, Tavily, etc.)
         return [
             {
                 "title": "Soybean aphid infestations expected to peak in Illinois this September",
@@ -73,16 +70,13 @@ def fetch_and_parse(urls):
 # 5. Add Embeddings & Store
 # -----------------------------
 def add_to_vectorstore(documents):
-    # Assuming each doc is a LangChain Document object
     vectorstore.add_documents(documents)
 
 # -----------------------------
 # 6. Retrieval + Metadata Filtering
 # -----------------------------
 def retrieve_relevant(meta_data, query, k=5):
-    # Use semantic search + metadata filter
     results = vectorstore.similarity_search(query, k=k)
-    # Filter results based on location / month if you stored metadata
     filtered_results = [
         doc for doc in results
         if doc.metadata.get("state") == meta_data["state"]
@@ -91,7 +85,7 @@ def retrieve_relevant(meta_data, query, k=5):
     return filtered_results
 
 # -----------------------------
-# 7. LLM Answer Generation
+# 7. LLM Answer Generation (via vLLM)
 # -----------------------------
 prompt_template = """
 You are an agriculture assistant. 
@@ -102,7 +96,15 @@ Retrieved Docs: {docs}
 """
 
 prompt = PromptTemplate(template=prompt_template, input_variables=["query", "docs"])
-llm = OpenAI(temperature=0)
+
+# Connect to vLLM server (OpenAI-compatible API)
+llm = ChatOpenAI(
+    model="meta-llama/Meta-Llama-3-8B-Instruct",  # or the model you served
+    openai_api_base="http://<server-ip>:8000/v1",  # replace <server-ip>
+    openai_api_key="EMPTY",  # vLLM ignores this, required by LangChain
+    temperature=0,
+)
+
 qa_chain = LLMChain(llm=llm, prompt=prompt)
 
 def generate_answer(query, docs):
