@@ -9,21 +9,58 @@ from langchain.vectorstores import Chroma
 from langchain.embeddings import HuggingFaceEmbeddings
 from langchain.document_loaders import WebBaseLoader
 from langchain.tools import BaseTool
+from serpapi import GoogleSearch
 import datetime
 
 # -----------------------------
 # 1. User Input
 # -----------------------------
-user_query = "common pest maryland montgomery 2022-09-01 07:17:00"
+user_query = "crops, common pest, maryland, montgomery, 2022-09-01, 07:17:00"
 
-# Parse metadata (simple example)
+def parse_user_data(text: str):
+    """Parse a free-form query into keywords, state, county, and timestamp.
+
+    Expected format (comma-separated):
+      "<keyword 1>, <keyword 2>, <state>, <county>, <YYYY-MM-DD>, <HH:MM:SS>"
+
+    Returns a dict with keys: keywords (list[str]), state (str), county (str), timestamp (datetime).
+    """
+    if not isinstance(text, str):
+        raise ValueError("Input must be a string")
+
+    parts = [p.strip() for p in text.strip().split(',') if p is not None and p.strip() != ""]
+    if len(parts) < 5:
+        raise ValueError("Input must include keywords, state, county, date, and time")
+
+    date_token = parts[-2].strip()
+    time_token = parts[-1].strip()
+    try:
+        timestamp = datetime.datetime.strptime(f"{date_token} {time_token}", "%Y-%m-%d %H:%M:%S")
+    except ValueError as exc:
+        raise ValueError("Timestamp must be in 'YYYY-MM-DD HH:MM:SS' format") from exc
+
+    county = parts[-3].strip()
+    state = parts[-4].strip()
+    keyword_tokens = [k.strip() for k in parts[:-4] if k.strip() != ""]
+    keywords = keyword_tokens
+
+    return {
+        "keywords": keywords,
+        "state": state.lower(),
+        "county": county.lower(),
+        "timestamp": timestamp,
+    }
+
+# Parse metadata from user query
+parsed = parse_user_data(user_query)
+print(parsed)
 meta_data = {
-    "state": "maryland",
-    "county": "montgomery",
-    "timestamp": datetime.datetime.strptime("2022-09-01 07:17:00", "%Y-%m-%d %H:%M:%S")
+    "state": parsed["state"],
+    "county": parsed["county"],
+    "timestamp": parsed["timestamp"],
 }
 
-keywords = ["common pest"]
+keywords = parsed["keywords"]
 
 # -----------------------------
 # 2. Vector Store + Embeddings
@@ -36,39 +73,62 @@ vectorstore = Chroma(persist_directory="./vectorstore", embedding_function=embed
 # -----------------------------
 class WebSearchTool(BaseTool):
     name = "web_search"
-    description = "Use this to search the web for info related to agriculture pests"
+    description = "Use this to search the web for the given keywords and meta-data"
 
-    def _run(self, query: str):
-        # Implement actual API call (SerpAPI, Bing, Tavily, etc.)
-        return [
-            {
-                "title": "Soybean aphid infestations expected to peak in Illinois this September",
-                "snippet": "Soybean aphids are expected to increase in September...",
-                "url": "https://example.com/article1"
-            },
-            {
-                "title": "University of Illinois crop watch: late-season pests",
-                "snippet": "Late-season pests include soybean aphids and spider mites...",
-                "url": "https://example.com/article2"
-            }
-        ]
+    def _run(self):
+        params = {
+            "engine": "google",
+            "q": getattr(self, "key_terms", ""),
+            "location": getattr(self, "location", ""),
+            "api_key": "d19541a8bf7c2e56f4ef32e6ea227808c29166d868dcbe0827b88d09effc805b"
+        }
 
+        try:
+            search = GoogleSearch(params)
+            results = search.get_dict()
+            organic_results = results.get("organic_results", [])
+
+            resultList = []
+            for value in organic_results:
+                myDict = {}
+                myDict['title'] = value.get('title', '')
+                myDict['url'] = value.get('link') or value.get('url', '')
+                myDict['snippet'] = value.get('snippet', '')
+                resultList.append(myDict)
+
+            return resultList
+        except Exception as exc:
+            print(f"WebSearchTool error: {exc}")
+            return []
+
+param_key_terms = " ".join(keywords)
+param_location = ", ".join([parsed["county"], parsed["state"], "United States"])
 web_search_tool = WebSearchTool()
+web_search_tool.location = param_location
+web_search_tool.key_terms = param_key_terms
 
 # -----------------------------
 # 4. Fetch & Parse Web Pages
 # -----------------------------
-def fetch_and_parse(urls):
+def fetch_and_parse(meta_data, myDictList):
     docs = []
-    for url in urls:
+    resultList = []
+    for index, myDict in enumerate(myDictList):
+        url = myDict["url"]
         loader = WebBaseLoader(url)
         doc = loader.load()  # returns list of Documents
+        doc[0].metadata["county"] = meta_data["county"]
+        doc[0].metadata["state"] = meta_data["state"]
+        doc[0].metadata["month"] = meta_data["timestamp"].month
         docs.extend(doc)
-    return docs
+        myDict['content'] = doc[0].page_content
+        resultList.append(myDict)
+    return (docs, resultList)
 
 # -----------------------------
 # 5. Add Embeddings & Store
 # -----------------------------
+# documents is a list of Document objects
 def add_to_vectorstore(documents):
     vectorstore.add_documents(documents)
 
@@ -79,13 +139,13 @@ def retrieve_relevant(meta_data, query, k=5):
     results = vectorstore.similarity_search(query, k=k)
     filtered_results = [
         doc for doc in results
-        if doc.metadata.get("state") == meta_data["state"]
+        if doc.metadata.get("state") == meta_data["state"] and doc.metadata.get("county") == meta_data["county"]
         and doc.metadata.get("month") == meta_data["timestamp"].month
     ]
     return filtered_results
 
 # -----------------------------
-# 7. LLM Answer Generation (via vLLM)
+# 7. LLM Answer Generation (via vLLM) XXXXXXXXXXXXXXXXX
 # -----------------------------
 prompt_template = """
 You are an agriculture assistant. 
@@ -115,14 +175,14 @@ def generate_answer(query, docs):
 # 8. Full Workflow
 # -----------------------------
 # 1. Web Search
-search_results = web_search_tool.run(" ".join(keywords + [meta_data["state"], meta_data["county"]]))
+search_results = web_search_tool.run()
 
 # 2. Fetch & Parse pages
-urls = [r["url"] for r in search_results]
-documents = fetch_and_parse(urls)
+documents, search_results = fetch_and_parse(meta_data, search_results)
 
 # 3. Add metadata for filtering
-for doc, r in zip(documents, search_results):
+for index, doc in enumerate(documents):
+    r = search_results[index]
     doc.metadata["url"] = r["url"]
     doc.metadata["state"] = meta_data["state"]
     doc.metadata["month"] = meta_data["timestamp"].month
@@ -131,8 +191,8 @@ for doc, r in zip(documents, search_results):
 add_to_vectorstore(documents)
 
 # 5. Retrieve relevant docs
-relevant_docs = retrieve_relevant(meta_data, "soybean aphid")
+relevant_docs = retrieve_relevant(meta_data, " ".join(keywords))
 
-# 6. Generate answer
-answer = generate_answer("What are common pests in Montgomery, Maryland for this time?", relevant_docs)
+# 6. Generate answer XXXXXXXXXXXXXXXXX
+answer = generate_answer(user_query, relevant_docs)
 print(answer)
