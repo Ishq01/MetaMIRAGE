@@ -2,19 +2,17 @@
 # WebAgent with vLLM + HuggingFaceEmbeddings
 # =============================
 
-# # Memory: add ConversationBufferMemory to the agent so it can handle follow-up queries without re-parsing everything.
-# #  Use RetrievalQA inside your agent: wrap your vectorstore.as_retriever() into a RetrievalQA chain, then expose it as a tool. That way the LLM doesn’t have to interpret raw docs.
-# Vectorstore persistence
 
-# You’re always adding docs, but not reloading or deduplicating. Over time, the store will bloat with duplicate pages.
-
+# Modification suggested by ChatGPT:Y
+#1. [DONE] You’re always adding docs, but not reloading or deduplicating. Over time, the store will bloat with duplicate pages.
 # ✅ Fix: either clear/recreate vectorstore per run, or use doc IDs for deduplication.
-
-# Synchronous loading of web pages
-
+#2. [DONE] Synchronous loading of web pages
 # WebBaseLoader(url).load() will block and be slow on multiple URLs.
-
 # ✅ Fix: use async loaders (LangChain has AsyncWebBaseLoader), or parallelize with asyncio.
+#3. [TO BE DONE] Memory: add ConversationBufferMemory to the agent so it can handle follow-up queries without re-parsing everything.
+#4. [TO BE DONE] Use RetrievalQA inside your agent: wrap your vectorstore.as_retriever() into a RetrievalQA chain, then expose it as a tool. That way the LLM doesn’t have to interpret raw docs.
+#5. [TO BE DONE] Vectorstore persistence
+
 
 
 from langchain.chains import LLMChain
