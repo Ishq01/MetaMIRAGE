@@ -5,7 +5,6 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import requests
-import json
 from chat_models.Client import Client
 from Utils.keyword_extractor import KeywordExtractor
 from Utils.web_scraper import SimpleWebScraper
@@ -20,34 +19,66 @@ class WebAgent:
         self.keyword_extractor = KeywordExtractor(model_name, openai_api_base)
         self.web_scraper = SimpleWebScraper()
         self.client = Client(model_name=model_name, openai_api_base=openai_api_base)
-        self.base_url = "https://serpapi.com/search.json"
+
+        # OLD SerpAPI endpoint (not used anymore)
+        # self.base_url = "https://serpapi.com/search.json"
+
+        # NEW You.com API endpoint
+        self.base_url = "https://api.you.com/search"
 
     def search(self, query, location="United States", num_results=10):
-        """Extract keywords and perform a SerpAPI search."""
+        """Extract keywords and perform a You.com Search API call."""
         keywords = self.keyword_extractor.extract_keywords(query)
         search_query = " ".join(keywords)
 
-        params = {
-            "engine": "google",
-            "q": search_query,
-            "location": location,
-            "api_key": self.api_key,
-            "num": num_results
+        # Build request body for You.com API
+        request_body = {
+            "query": search_query,
+            "num_web_results": num_results,
+            "page": 1,
+            "recency": 365,
+            "include_domains": []
+        }
+
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
         }
 
         try:
-            response = requests.get(self.base_url, params=params)
+            response = requests.post(self.base_url, headers=headers, json=request_body)
+            
+            # Check for rate limit (429 Too Many Requests)
+            if response.status_code == 429:
+                print(f"⚠️  Rate limit reached (429). API call limit exceeded.")
+                raise RateLimitError("You.com API rate limit exceeded (429)")
+            
             response.raise_for_status()
+
             data = response.json()
-            organic_results = data.get("organic_results", [])
+            web_results = data.get("results", {}).get("web", [])
+
+            # Format to match old SerpAPI structure
             results = [
-                {"title": r.get("title"), "link": r.get("link"), "snippet": r.get("snippet")}
-                for r in organic_results if r.get("link")
+                {
+                    "title": r.get("title"),
+                    "link": r.get("url"),
+                    "snippet": r.get("description")
+                        or (r.get("snippets")[0] if r.get("snippets") and len(r.get("snippets")) > 0 else "")
+                }
+                for r in web_results if r.get("url")
             ]
+
             self.results_store[query] = results
-            print(f"🔍 Found {len(results)} results for '{query}'")
+            print(f"🔍 Found {len(results)} results for '{search_query}'")
             return results
+
         except requests.RequestException as e:
+            # Check if it's a rate limit error from response
+            if hasattr(e, 'response') and e.response is not None:
+                if e.response.status_code == 429:
+                    print(f"⚠️  Rate limit reached (429). API call limit exceeded.")
+                    raise RateLimitError("You.com API rate limit exceeded (429)")
             print(f"[Error] Web search failed: {e}")
             return []
 
@@ -80,7 +111,6 @@ class WebAgent:
         """
 
         try:
-            # Use the Client's chat method instead of direct API call
             summary = self.client.chat(prompt=prompt, images=[])
             print("✅ Summary generated successfully.")
             return summary.strip()
@@ -94,19 +124,21 @@ class WebAgent:
         Returns a summary string that can be appended to prompts.
         """
         try:
-            # Step 1: Search
             results = self.search(query, location=location, num_results=num_results)
             if not results:
                 return ""
             
-            # Step 2: Scrape
             text = self.get_text(query)
             if not text:
                 return ""
             
-            # Step 3: Summarize
             summary = self.summarize_results(query)
             return summary
         except Exception as e:
             print(f"[Error] Web context retrieval failed: {e}")
             return ""
+
+
+class RateLimitError(Exception):
+    """Raised when API rate limit is exceeded."""
+    pass
